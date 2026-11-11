@@ -1,20 +1,24 @@
 """Ctrl+C -> BOOM + fullscreen cat. Ctrl+V -> BOOM + a random job application site.
 
 Copy/paste still work normally; the keystrokes are only observed, never blocked.
-Run with `pythonw boom.py` to hide the console. Quit from the tray-less console with Ctrl+Break,
-or kill pythonw.exe in Task Manager.
+Runs on Windows and Linux (X11). See README.md for how to start and stop it.
 """
-import ctypes
 import math
 import os
 import queue
 import random
+import shutil
 import struct
+import subprocess
 import sys
 import tkinter as tk
 import wave
 import webbrowser
-import winsound
+
+IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    import ctypes
+    import winsound
 
 from PIL import Image, ImageTk
 from pynput import keyboard
@@ -31,7 +35,30 @@ CTRL_V_URLS = [  # Ctrl+V opens one of these at random
     "https://www.indeed.com/?from=gnav-acme--acme-webapp",
 ]
 
-VK_C, VK_V = 0x43, 0x56
+VK_C, VK_V = 0x43, 0x56  # Windows virtual-key codes
+CTRL_KEYS = (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
+
+
+def letter(key):
+    """Return 'c' / 'v' for those keys, else None. Windows reports vk codes; X11 reports the char."""
+    vk = getattr(key, "vk", None)
+    if vk == VK_C:
+        return "c"
+    if vk == VK_V:
+        return "v"
+    char = (getattr(key, "char", None) or "").lower()
+    return char if char in ("c", "v") else None
+
+
+def play_sound(path):
+    if IS_WINDOWS:
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        return
+    for cmd in (["paplay", path], ["pw-play", path], ["aplay", "-q", path],
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path]):
+        if shutil.which(cmd[0]):
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
 
 
 def make_boom(path):
@@ -76,9 +103,11 @@ class App:
         self.root.after(15, self.poll)
 
     def _no_focus_steal(self):
+        self.root.attributes("-alpha", 1.0)
+        if not IS_WINDOWS:
+            return  # overrideredirect windows don't take focus on X11 anyway
         # WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT: never takes focus
         # from the app you paste into, and clicks pass straight through the fullscreen overlay.
-        self.root.attributes("-alpha", 1.0)
         self.root.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
         GWL_EXSTYLE = -20
@@ -87,18 +116,18 @@ class App:
 
     # --- listener thread ---
     def on_press(self, key):
-        if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+        if key in CTRL_KEYS:
             self.ctrl_down = True
             return
-        vk = getattr(key, "vk", None)
-        if self.ctrl_down and vk in (VK_C, VK_V) and vk not in self.held:
-            self.held.add(vk)  # ignore auto-repeat while held
-            self.events.put(vk)
+        name = letter(key)
+        if self.ctrl_down and name and name not in self.held:
+            self.held.add(name)  # ignore auto-repeat while held
+            self.events.put(name)
 
     def on_release(self, key):
-        if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+        if key in CTRL_KEYS:
             self.ctrl_down = False
-        self.held.discard(getattr(key, "vk", None))
+        self.held.discard(letter(key))
 
     # --- tk thread ---
     def poll(self):
@@ -109,9 +138,9 @@ class App:
             pass
         self.root.after(15, self.poll)
 
-    def boom(self, vk):
-        winsound.PlaySound(SOUND_FILE, winsound.SND_FILENAME | winsound.SND_ASYNC)
-        if vk == VK_V:
+    def boom(self, name):
+        play_sound(SOUND_FILE)
+        if name == "v":
             webbrowser.open(random.choice(CTRL_V_URLS))
         elif os.path.exists(CTRL_C_IMAGE):
             self.show_image(CTRL_C_IMAGE)
@@ -150,7 +179,7 @@ if __name__ == "__main__":
         make_boom(SOUND_FILE)
     if "--test" in sys.argv:
         app = App()
-        app.root.after(300, app.boom, VK_C)
+        app.root.after(300, app.boom, "c")
         app.root.after(SHOW_MS + FADE_MS + 800, app.root.destroy)
         app.root.mainloop()
     else:

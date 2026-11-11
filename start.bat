@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-python -m pip install --quiet pynput pillow
+python -m pip install --quiet -r requirements.txt
 start "" pythonw boom.py
